@@ -1,0 +1,26 @@
+# Environment variables - NEVER COMMIT SECRETS
+.env
+.env.local
+.env.development
+.env.production
+*.env.local
+
+# Node modules
+node_modules/
+freecall-app/node_modules/
+freecall-server/node_modules/
+
+# Build outputs & caches
+dist/
+build/
+freecall-app/dist/
+.vite/
+
+# OS & IDE files
+.DS_Store
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.vscode/
+.idea/
