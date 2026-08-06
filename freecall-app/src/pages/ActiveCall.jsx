@@ -28,6 +28,8 @@ const ActiveCall = () => {
     toggleSpeaker,
     endCall,
     formatTime,
+    callMode,
+    statusMessage,
   } = useSocket();
 
   const [onHold, setOnHold] = useState(false);
@@ -73,10 +75,15 @@ const ActiveCall = () => {
           </svg>
         </button>
 
-        <p className="font-bold uppercase text-xs flex items-center gap-2" style={{ color: "#F37338", letterSpacing: "0.06em" }}>
-          <span style={{ width: "5px", height: "5px", borderRadius: "999px", backgroundColor: "#F37338", display: "inline-block", animation: "pulse 1.5s infinite" }}></span>
-          {onHold ? "ON HOLD" : "ACTIVE CALL"}
-        </p>
+        <div className="flex flex-col items-center">
+          <p className="font-bold uppercase text-xs flex items-center gap-2" style={{ color: "#F37338", letterSpacing: "0.06em" }}>
+            <span style={{ width: "6px", height: "6px", borderRadius: "999px", backgroundColor: "#F37338", display: "inline-block", animation: "pulse 1.5s infinite" }}></span>
+            {onHold ? "ON HOLD" : callMode === "pstn" ? "GSM MOBILE CALL" : "AGORA HD VOICE"}
+          </p>
+          {statusMessage && (
+            <p className="text-[10px] text-gray-400 mt-0.5">{statusMessage}</p>
+          )}
+        </div>
 
         <button className="w-10 h-10 rounded-full flex items-center justify-center" style={{ backgroundColor: "rgba(243,240,238,0.08)" }}>
           <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="#696969" strokeWidth={1.5}>

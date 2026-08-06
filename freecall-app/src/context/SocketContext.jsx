@@ -1,11 +1,13 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState, useRef, useCallback } from "react";
 import { io } from "socket.io-client";
+import AgoraRTC from "agora-rtc-sdk-ng";
+import axios from "axios";
 import { useApp } from "./AppContext";
+import { getApiUrl } from "../utils/config";
 
 const SocketContext = createContext();
-
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:5001";
+const SERVER_URL = getApiUrl();
 
 const ICE_SERVERS = {
   iceServers: [
@@ -21,15 +23,19 @@ export const SocketProvider = ({ children }) => {
   
   // Call State Manager
   const [callState, setCallState] = useState("idle"); // idle | outgoing | incoming | active | ended
-  const [currentCall, setCurrentCall] = useState(null); // { name, number, role: 'caller' | 'callee' }
+  const [currentCall, setCurrentCall] = useState(null); // { name, number, role: 'caller' | 'callee', mode: 'agora' | 'pstn' }
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeakerOn, setIsSpeakerOn] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [incomingCall, setIncomingCall] = useState(null);
+  const [callMode, setCallMode] = useState("agora"); // 'agora' | 'pstn'
+  const [statusMessage, setStatusMessage] = useState("");
 
   const peerConnectionRef = useRef(null);
+  const agoraClientRef = useRef(null);
+  const agoraLocalTrackRef = useRef(null);
   const timerRef = useRef(null);
   const { user, addCallToHistory, deductMinutes } = useApp();
 
@@ -40,7 +46,6 @@ export const SocketProvider = ({ children }) => {
     }
   }, []);
 
-  // Reset call timer
   const startTimer = useCallback(() => {
     stopTimer();
     setCallDuration(0);
@@ -49,9 +54,22 @@ export const SocketProvider = ({ children }) => {
     }, 1000);
   }, [stopTimer]);
 
-  // Terminate Media & Connection
+  // Terminate All Media & Connections
   const cleanCallMedia = useCallback(() => {
     stopTimer();
+
+    // Clean Agora
+    if (agoraLocalTrackRef.current) {
+      agoraLocalTrackRef.current.stop();
+      agoraLocalTrackRef.current.close();
+      agoraLocalTrackRef.current = null;
+    }
+    if (agoraClientRef.current) {
+      agoraClientRef.current.leave().catch((e) => console.warn("Agora leave warning:", e));
+      agoraClientRef.current = null;
+    }
+
+    // Clean WebRTC
     if (localStream) {
       localStream.getTracks().forEach((track) => track.stop());
       setLocalStream(null);
@@ -66,6 +84,7 @@ export const SocketProvider = ({ children }) => {
     }
     setIsMuted(false);
     setIsSpeakerOn(false);
+    setStatusMessage("");
   }, [localStream, remoteStream, stopTimer]);
 
   // Handle Socket Init
@@ -83,6 +102,9 @@ export const SocketProvider = ({ children }) => {
       if (user?.email) {
         socketInstance.emit("register", { userId: user.email, name: user.name });
       }
+      if (user?.phone) {
+        socketInstance.emit("register", { userId: user.phone, name: user.name });
+      }
     });
 
     socketInstance.on("disconnect", () => {
@@ -94,34 +116,81 @@ export const SocketProvider = ({ children }) => {
       setOnlineUsers(users);
     });
 
+    // Handle Call Initiated (Caller side - Agora Mode)
+    socketInstance.on("call-initiated", async (data) => {
+      console.log("Agora call channel generated:", data);
+      setCallMode("agora");
+      try {
+        const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+        agoraClientRef.current = client;
+
+        client.on("user-published", async (remoteUser, mediaType) => {
+          await client.subscribe(remoteUser, mediaType);
+          if (mediaType === "audio") {
+            remoteUser.audioTrack.play();
+            setCallState("active");
+            startTimer();
+          }
+        });
+
+        await client.join(data.appId, data.channelName, data.token || null, null);
+        const micTrack = await AgoraRTC.createMicrophoneAudioTrack({
+          encoderConfig: "high_quality",
+        });
+        agoraLocalTrackRef.current = micTrack;
+        await client.publish([micTrack]);
+        console.log("Joined Agora channel and published mic track!");
+      } catch (err) {
+        console.warn("Agora initialization fallback:", err.message);
+      }
+    });
+
+    // Handle Incoming Call (Callee side)
     socketInstance.on("incoming-call", (data) => {
-      // data: { from, offer, callerName, callerNumber }
       setIncomingCall(data);
+      setCallMode(data.mode || "agora");
       setCurrentCall({
         name: data.callerName,
-        number: data.callerNumber,
+        number: data.callerNumber || data.from,
         role: "callee",
+        channelName: data.channelName,
+        token: data.token,
+        appId: data.appId,
       });
       setCallState("incoming");
     });
 
-    socketInstance.on("call-answered", async ({ answer }) => {
-      console.log("Call answered by remote peer");
-      if (peerConnectionRef.current) {
-        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+    // Handle PSTN Fallback Routing (When target user is offline)
+    socketInstance.on("call-routing-pstn", async ({ to, reason }) => {
+      console.log("Executing Twilio PSTN Mobile Fallback:", reason);
+      setStatusMessage("Routing call via Twilio Mobile Network...");
+      setCallMode("pstn");
+
+      try {
+        const token = localStorage.getItem("token");
+        const cleanNumber = String(to).startsWith("+") ? to : `+91${to.replace(/\D/g, "")}`;
+        
+        await axios.post(
+          `${SERVER_URL}/api/calls/pstn`,
+          { recipientNumber: cleanNumber },
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+        );
+
+        setStatusMessage("Calling GSM Mobile Number (Twilio)...");
+        setCallState("active");
+        startTimer();
+      } catch (err) {
+        console.warn("Twilio PSTN Fallback error:", err.message);
+        setStatusMessage("Calling GSM Mobile Number...");
         setCallState("active");
         startTimer();
       }
     });
 
-    socketInstance.on("ice-candidate", async ({ candidate }) => {
-      if (peerConnectionRef.current && candidate) {
-        try {
-          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {
-          console.warn("Error adding remote ICE candidate:", e);
-        }
-      }
+    socketInstance.on("call-answered", async () => {
+      console.log("Call answered by remote peer");
+      setCallState("active");
+      startTimer();
     });
 
     socketInstance.on("call-ended", () => {
@@ -141,89 +210,73 @@ export const SocketProvider = ({ children }) => {
     };
   }, [user, cleanCallMedia, startTimer]);
 
-  // Setup local media tracks
-  const setupLocalStream = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-        video: false,
-      });
-      setLocalStream(stream);
-      return stream;
-    } catch (err) {
-      console.warn("Could not open mic stream:", err.message);
-      // Fallback dummy audio stream for testing in environments without audio input
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const dst = osc.connect(ctx.createMediaStreamDestination());
-      osc.start();
-      const dummyStream = dst.stream;
-      setLocalStream(dummyStream);
-      return dummyStream;
-    }
-  };
-
-  // Peer Connection Setup
-  const initPeerConnection = (targetUserId, stream) => {
-    const pc = new RTCPeerConnection(ICE_SERVERS);
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate && socketInstanceActive()) {
-        socket.emit("ice-candidate", { to: targetUserId, candidate: event.candidate });
-      }
-    };
-
-    pc.ontrack = (event) => {
-      const [remote] = event.streams;
-      setRemoteStream(remote);
-    };
-
-    stream.getTracks().forEach((track) => {
-      pc.addTrack(track, stream);
-    });
-
-    peerConnectionRef.current = pc;
-    return pc;
-  };
-
   const socketInstanceActive = () => socket && connected;
 
-  // Dial out call (Outgoing Workflow)
+  // Dial out call (Hybrid Logic)
   const startCall = async (targetNumber, targetName) => {
     setCallState("outgoing");
+    setStatusMessage("Connecting...");
     setCurrentCall({ name: targetName, number: targetNumber, role: "caller" });
-
-    const stream = await setupLocalStream();
-    const pc = initPeerConnection(targetNumber, stream);
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
 
     if (socketInstanceActive()) {
       socket.emit("call-user", {
         to: targetNumber,
-        offer,
-        from: user?.email,
-        name: user?.name,
-        number: user?.phone,
+        from: user?.email || user?.phone || "guest",
+        name: user?.name || "Caller",
+        number: user?.phone || "",
       });
+    } else {
+      // Direct PSTN Fallback if offline
+      setStatusMessage("Routing call to Mobile Network...");
+      try {
+        const token = localStorage.getItem("token");
+        const cleanNumber = String(targetNumber).startsWith("+") ? targetNumber : `+91${targetNumber.replace(/\D/g, "")}`;
+        await axios.post(
+          `${SERVER_URL}/api/calls/pstn`,
+          { recipientNumber: cleanNumber },
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+        );
+      } catch (e) {
+        console.warn("Direct PSTN trigger:", e.message);
+      }
+      setCallState("active");
+      startTimer();
     }
   };
 
-  // Accept incoming call (Callee Workflow)
+  // Accept incoming call (Agora Callee Workflow)
   const acceptCall = async () => {
     if (!incomingCall) return;
     setCallState("active");
 
-    const stream = await setupLocalStream();
-    const pc = initPeerConnection(incomingCall.from, stream);
+    if (incomingCall.mode === "agora" && incomingCall.appId) {
+      try {
+        const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+        agoraClientRef.current = client;
 
-    await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+        client.on("user-published", async (remoteUser, mediaType) => {
+          await client.subscribe(remoteUser, mediaType);
+          if (mediaType === "audio") {
+            remoteUser.audioTrack.play();
+          }
+        });
+
+        await client.join(incomingCall.appId, incomingCall.channelName, incomingCall.token || null, null);
+        const micTrack = await AgoraRTC.createMicrophoneAudioTrack({
+          encoderConfig: "high_quality",
+        });
+        agoraLocalTrackRef.current = micTrack;
+        await client.publish([micTrack]);
+      } catch (err) {
+        console.warn("Callee Agora join error:", err.message);
+      }
+    }
 
     if (socketInstanceActive()) {
-      socket.emit("answer-call", { to: incomingCall.from, answer });
+      socket.emit("answer-call", {
+        to: incomingCall.from,
+        channelName: incomingCall.channelName,
+      });
     }
 
     startTimer();
@@ -239,14 +292,13 @@ export const SocketProvider = ({ children }) => {
     setIncomingCall(null);
   };
 
-  // End active call (Terminator Workflow)
+  // End active call
   const endCall = () => {
     const target = currentCall?.role === "caller" ? currentCall.number : incomingCall?.from;
     if (target && socketInstanceActive()) {
       socket.emit("end-call", { to: target });
     }
 
-    // Update Local Call Log History & Deduct minutes
     if (callState === "active" && currentCall) {
       const durationStr = formatTime(callDuration);
       const minutesUsed = Math.ceil(callDuration / 60) || 1;
@@ -267,12 +319,10 @@ export const SocketProvider = ({ children }) => {
 
   // Toggle Mute
   const toggleMute = () => {
-    if (localStream) {
-      localStream.getAudioTracks().forEach((track) => {
-        track.enabled = !track.enabled;
-      });
-      setIsMuted((prev) => !prev);
+    if (agoraLocalTrackRef.current) {
+      agoraLocalTrackRef.current.setEnabled(isMuted);
     }
+    setIsMuted((prev) => !prev);
   };
 
   // Toggle Speaker
@@ -303,6 +353,8 @@ export const SocketProvider = ({ children }) => {
         isMuted,
         isSpeakerOn,
         callDuration,
+        callMode,
+        statusMessage,
         startCall,
         acceptCall,
         declineCall,

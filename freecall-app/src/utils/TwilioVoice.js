@@ -1,7 +1,7 @@
-// TwilioVoice.js — Manages Twilio Voice SDK Device for real PSTN calls with browser audio
 import { Device } from "@twilio/voice-sdk";
+import { getApiUrl } from "./config";
 
-const API_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:5001";
+const API_URL = getApiUrl();
 
 let device = null;
 let currentConnection = null;

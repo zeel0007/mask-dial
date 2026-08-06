@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
+import { getApiUrl } from "../utils/config";
 import axios from "axios";
 
-const API_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:5001";
+const API_URL = getApiUrl();
 
 const Field = ({ label, name, type = "text", placeholder, value, onChange, icon }) => (
   <div className="mb-5">

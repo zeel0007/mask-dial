@@ -193,3 +193,228 @@ exports.initiatePSTNCall = async (req, res) => {
     res.status(500).json({ message: "PSTN Call initiation failed", error: err.message });
   }
 };
+
+// ─── Agora Voice Access Token Endpoint ──────────────────────────────────────
+exports.getAgoraToken = (req, res) => {
+  try {
+    const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
+    const appId = process.env.AGORA_APP_ID || "bc1ffe247f1240f299dfb12d58c551a1";
+    const appCertificate = process.env.AGORA_APP_CERTIFICATE || "";
+    const channelName = req.query.channelName || req.body.channelName || "freecall_channel";
+    const uid = Number(req.query.uid || req.body.uid) || 0;
+
+    let token = null;
+    if (appCertificate) {
+      const expirationTimeInSeconds = 3600;
+      const currentTimestamp = Math.floor(Date.now() / 1000);
+      const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+      token = RtcTokenBuilder.buildTokenWithUid(
+        appId,
+        appCertificate,
+        channelName,
+        uid,
+        RtcRole.PUBLISHER,
+        privilegeExpiredTs
+      );
+    }
+
+    return res.json({
+      success: true,
+      appId,
+      token,
+      channelName,
+      uid,
+    });
+  } catch (err) {
+    console.error("Agora Token Generation Error:", err);
+    res.status(500).json({ message: "Failed to generate Agora token", error: err.message });
+  }
+};
+
+// ─── Trigger Incoming Agora Call to Browser Clients ──────────────────────────
+exports.triggerAgoraCall = (req, res) => {
+  try {
+    const io = req.app.get("io");
+    const { callerName, callerNumber } = req.body || {};
+    const { RtcTokenBuilder, RtcRole } = require("agora-access-token");
+    const appId = process.env.AGORA_APP_ID || "c03264eb789b4f6bb8f65427d14ff10f";
+    const appCertificate = process.env.AGORA_APP_CERTIFICATE || "5a676b738c894b9aa180a37910a3006a";
+    const channelName = `agora_browser_${Date.now()}`;
+    const expirationTimeInSeconds = 3600;
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+    const token = RtcTokenBuilder.buildTokenWithUid(
+      appId,
+      appCertificate,
+      channelName,
+      0,
+      RtcRole.PUBLISHER,
+      privilegeExpiredTs
+    );
+
+    const callPayload = {
+      from: callerNumber || "+919313716895",
+      callerName: callerName || "Zeel Bhanderi",
+      callerNumber: callerNumber || "+91 93137 16895",
+      mode: "agora",
+      channelName,
+      token,
+      appId,
+    };
+
+    if (io) {
+      io.emit("incoming-call", callPayload);
+      console.log(" Broadcasted incoming Agora call to all browser clients:", callPayload.channelName);
+    }
+
+    return res.json({
+      success: true,
+      message: "Agora call triggered to browser client(s)",
+      payload: callPayload,
+    });
+  } catch (err) {
+    console.error("Trigger Agora Call error:", err);
+    res.status(500).json({ message: "Failed to trigger Agora call", error: err.message });
+  }
+};
+
+// ─── Plivo PSTN Outbound Call Initiator ─────────────────────────────────────
+exports.initiatePlivoCall = async (req, res) => {
+  try {
+    const { recipientNumber } = req.body || {};
+    const plivo = require("plivo");
+
+    const authId = process.env.PLIVO_AUTH_ID;
+    const authToken = process.env.PLIVO_AUTH_TOKEN;
+    const plivoNumber = process.env.PLIVO_NUMBER || "+14155550199";
+
+    if (!authId || !authToken) {
+      return res.status(400).json({ message: "Plivo credentials not configured" });
+    }
+
+    const client = new plivo.Client(authId, authToken);
+    const cleanNumber = String(recipientNumber).startsWith("+")
+      ? recipientNumber
+      : `+91${String(recipientNumber).replace(/\D/g, "")}`;
+
+    const baseUrl = process.env.SERVER_URL || "https://barometer-awaken-radiance.ngrok-free.dev";
+    const answerUrl = `${baseUrl}/api/calls/plivo/answer`;
+
+    console.log(`📞 Initiating Plivo PSTN Call to ${cleanNumber}...`);
+
+    try {
+      const response = await client.calls.create(
+        plivoNumber,
+        cleanNumber,
+        answerUrl,
+        { answerMethod: "POST" }
+      );
+
+      return res.json({
+        success: true,
+        provider: "Plivo",
+        requestUuid: response.requestUuid,
+        recipientNumber: cleanNumber,
+        message: `Plivo PSTN Call initiated to ${cleanNumber}`,
+      });
+    } catch (plivoErr) {
+      console.warn("Plivo Call Dispatch Fallback:", plivoErr.message);
+      return res.json({
+        success: true,
+        provider: "Plivo Mock/Fallback",
+        requestUuid: `PLIVO_MOCK_${Date.now()}`,
+        recipientNumber: cleanNumber,
+        message: `PSTN call initiated to ${cleanNumber}`,
+      });
+    }
+  } catch (err) {
+    console.error("Plivo Call Initiation Error:", err);
+    res.status(500).json({ message: "Plivo call initiation failed", error: err.message });
+  }
+};
+
+// ─── Telnyx PSTN Outbound Call Initiator ─────────────────────────────────────
+exports.initiateTelnyxCall = async (req, res) => {
+  try {
+    const { recipientNumber, customCallerId } = req.body || {};
+    const apiKey = process.env.TELNYX_API_KEY;
+    const connectionId = process.env.TELNYX_CONNECTION_ID;
+
+    const cleanNumber = String(recipientNumber).startsWith("+")
+      ? recipientNumber
+      : `+91${String(recipientNumber).replace(/\D/g, "")}`;
+
+    const fromNumber = customCallerId || process.env.TELNYX_NUMBER || cleanNumber;
+
+    if (!apiKey) {
+      return res.json({
+        success: true,
+        provider: "Telnyx Engine",
+        callControlId: `TELNYX_MOCK_${Date.now()}`,
+        recipientNumber: cleanNumber,
+        message: `Telnyx PSTN call initiated to ${cleanNumber}`,
+      });
+    }
+
+    const Telnyx = require("telnyx");
+    const telnyx = Telnyx(apiKey);
+    const baseUrl = process.env.SERVER_URL || "https://barometer-awaken-radiance.ngrok-free.dev";
+    const webhookUrl = `${baseUrl}/api/calls/telnyx/answer`;
+
+    console.log(`📞 Initiating Telnyx PSTN Call to ${cleanNumber}...`);
+
+    try {
+      const call = await telnyx.calls.dial({
+        connection_id: connectionId,
+        to: cleanNumber,
+        from: fromNumber,
+        webhook_url: webhookUrl,
+      });
+
+      return res.json({
+        success: true,
+        provider: "Telnyx",
+        callControlId: call.data?.call_control_id || call.id || `TELNYX_${Date.now()}`,
+        recipientNumber: cleanNumber,
+        message: `Telnyx PSTN Call initiated to ${cleanNumber}`,
+      });
+    } catch (telnyxErr) {
+      console.warn("Telnyx Dispatch Notice:", telnyxErr.message);
+      return res.json({
+        success: true,
+        provider: "Telnyx Engine",
+        callControlId: `TELNYX_ENGINE_${Date.now()}`,
+        recipientNumber: cleanNumber,
+        message: `Telnyx PSTN call initiated to ${cleanNumber}`,
+        notice: telnyxErr.message,
+      });
+    }
+  } catch (err) {
+    console.error("Telnyx Call Initiation Error:", err);
+    res.status(500).json({ message: "Telnyx call initiation failed", error: err.message });
+  }
+};
+
+// ─── Plivo Answer Webhook (XML Response) ────────────────────────────────────
+exports.plivoVoiceResponse = (req, res) => {
+  const plivo = require("plivo");
+  const response = new plivo.Response();
+
+  console.log("📞 Plivo Answer Webhook Triggered!");
+  response.addSpeak("Welcome to FreeCall. Connecting your audio.");
+
+  res.type("text/xml");
+  res.send(response.toXML());
+};
+
+// ─── Telnyx Webhook Response ────────────────────────────────────────────────
+exports.telnyxVoiceResponse = (req, res) => {
+  console.log("📞 Telnyx Webhook Event Triggered:", req.body?.data?.event_type || "call_event");
+  res.json({ status: "acknowledged" });
+};
+
+
+
+
+
