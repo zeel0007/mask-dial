@@ -226,33 +226,6 @@ sequenceDiagram
     Express-->>User: 201 Created { token, user }
 ```
 
-### Browser-to-Phone (PSTN) Call Sequence
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as User Browser
-    participant SDK as Twilio Voice SDK
-    participant Server as freecall-server
-    participant Twilio as Twilio Voice Cloud
-    actor Phone as Recipient Phone
-
-    User->>Server: GET /api/calls/voice-token (with Bearer JWT)
-    Server-->>User: { token, identity: "guest_example_com" }
-    User->>SDK: Device.setup(token)
-    SDK-->>Twilio: Register WebRTC Device
-    Twilio-->>SDK: Registered OK
-
-    User->>SDK: device.connect({ To: "+919712707399", callerId: "+919316880199" })
-    SDK->>Twilio: Initiate WebRTC Voice Stream
-    Twilio->>Server: POST /api/calls/twiml (From=client:guest_example_com, To=+919712707399)
-    Server-->>Twilio: 200 OK TwiML XML <Response><Dial callerId="+919316880199"><Number>+919712707399</Number></Dial></Response>
-    Twilio->>Phone: Ring (+91 9712707399) [Displaying Caller ID: +91 9316880199]
-    Phone-->>Twilio: Answer Call
-    Twilio-->>SDK: WebRTC Audio Stream Connected
-    SDK->>User: Attach remote audio track to DOM <audio autoPlay /> element
-    Note over User,Phone: Live 2-way audio communication active
-```
 
 ### Browser-to-Browser WebRTC Signaling Sequence
 
