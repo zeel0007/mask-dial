@@ -31,54 +31,7 @@ This document provides a complete architectural and technical specification for 
 
 ---
 
-## 2. High-Level System Architecture
 
-```mermaid
-flowchart TD
-    subgraph Frontend [freecall-app - React 19 / Vite]
-        UI[User Interface & Components]
-        Context[AppContext & SocketContext]
-        TwilioSDK[Twilio Voice SDK v2]
-        WebRTC[Browser WebRTC Media Engine]
-    end
-
-    subgraph Tunneling [Tunneling Layer]
-        Ngrok[ngrok Public HTTPS Tunnel]
-    end
-
-    subgraph Backend [freecall-server - Express 5 / Node.js]
-        AuthRoutes[/api/auth Routes]
-        CallRoutes[/api/calls Routes]
-        TwiMLCtrl[TwiML Controller]
-        Signaling[Socket.io Signaling Server]
-    end
-
-    subgraph Storage [Data Layer]
-        MongoDB[(MongoDB Database)]
-        MemStore[(In-Memory Fallback Store)]
-    end
-
-    subgraph External [External Services]
-        TwilioCloud[Twilio Voice Cloud]
-        PSTN[Global PSTN Telecom Network]
-    end
-
-    UI <--> Context
-    Context <--> TwilioSDK
-    Context <--> WebRTC
-    
-    UI <-->|HTTP / REST| AuthRoutes
-    UI <-->|HTTP / REST| CallRoutes
-    Context <-->|WebSocket| Signaling
-    
-    Ngrok <-->|HTTPS Tunnel| CallRoutes
-    TwilioCloud <-->|Webhook POST| Ngrok
-    TwilioCloud <-->|SIP / PSTN Bridge| PSTN
-    TwilioSDK <-->|WebRTC Voice Stream| TwilioCloud
-    
-    CallRoutes <--> MongoDB
-    CallRoutes -.- MemStore
-```
 
 ---
 
