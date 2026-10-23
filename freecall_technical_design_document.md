@@ -227,33 +227,7 @@ sequenceDiagram
 ```
 
 
-### Browser-to-Browser WebRTC Signaling Sequence
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Caller as Caller Browser
-    participant Socket as Socket.io Server
-    actor Callee as Callee Browser
-
-    Caller->>Socket: emit("register", { userId: "caller@example.com" })
-    Callee->>Socket: emit("register", { userId: "callee@example.com" })
-
-    Caller->>Caller: getUserMedia({ audio: true })
-    Caller->>Caller: createOffer()
-    Caller->>Socket: emit("call-user", { to: "callee@example.com", offer })
-    Socket->>Callee: emit("incoming-call", { from: "caller@example.com", offer })
-
-    Callee->>Callee: getUserMedia({ audio: true })
-    Callee->>Callee: createAnswer(offer)
-    Callee->>Socket: emit("answer-call", { to: "caller@example.com", answer })
-    Socket->>Caller: emit("call-answered", { answer })
-
-    Caller<->Callee: Exchange ICE Candidates via Socket.io
-    Note over Caller,Callee: Peer-to-Peer WebRTC Audio Channel Established
-```
-
----
 
 ## 7. Database Schema Reference
 
